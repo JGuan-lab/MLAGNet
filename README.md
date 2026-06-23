@@ -2,7 +2,7 @@
 
 > A **unified feature-extraction framework for medical imaging** that drives three tasks — **super-resolution, semantic segmentation, and image classification** — with the same set of core building blocks (depthwise separable convolution + local self-attention + gated feed-forward).
 
-This repository is the cleaned-up version of the thesis codebase. The three tasks share the same feature-extraction design (`DConv` + `MDTA/LSA` + `GDFN` + `Transformerblock`) and are built as:
+The three tasks share the same feature-extraction design (`DConv` + `MDTA/LSA` + `GDFN` + `Transformerblock`) and are built as:
 
 | Task | Paradigm | Main network |
 |------|----------|--------------|
@@ -153,19 +153,8 @@ cat classification.tar.part* > classification.tar && tar -xf classification.tar
 
 > The breast **histopathology** classification dataset is **not** in the Zenodo archive due to size; get it from [Hugging Face](https://huggingface.co/datasets/EulerianKnight/breast-histopathology-images-train-test-valid-split).
 
----
 
-## Notes
 
-1. **Duplicate scripts**: SR `testfull/testfull2/testfull8` = 4x/2x/8x (only the `num_upsample` and paths differ); segmentation `train0/1/4/11/22/44 / trainup*` are Transformer-block-count ablations on the same angiography dataset (canonical = `trainani.py`); classification `train{isic,mhist,h,x}` = the same network on 4 different datasets.
-2. **Training uses pre-generated LR**: SR training reads pre-downsampled LR pairs; `degradtion.py` (online Real-ESRGAN degradation) is kept as an optional path, not wired into the training loop by default.
-3. **Known minor issues** (found during cleanup, left as-is to preserve the original): the HL/HH branch in `superresolution/waveloss.py` `DLoss` appears to compare fake vs fake; `WeightedFeatureAggregation` output in `segmentation/uufenge.py` is computed but not used by the final logits; `segmentation/test1.py` `Classifier(2)` is missing the `upblocks/downblocks` args.
-
----
-
-## About
-
-This repository was organized from the original thesis project `uureal`: code only (data, weights, logs, output images, and caches removed), reorganized into **super-resolution / segmentation / classification**, with a small number of broken/empty files cleaned up. The full original project (with data and weights) is kept on the lab server, unchanged.
 
 
 
