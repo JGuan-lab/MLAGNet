@@ -1,0 +1,496 @@
+# import torch
+# import torch.nn as nn
+# import torch.nn.functional as F
+# from thop import profile
+
+# class DConv(nn.Module):  # depthwise separable convolution
+#     def __init__(self, inchannel, outchannel):
+#         super(DConv, self).__init__()
+#         self.dconv = nn.Sequential(
+#             nn.Conv2d(inchannel, inchannel, kernel_size=3, padding=1, groups=inchannel),
+#             nn.BatchNorm2d(inchannel),
+#             nn.ReLU(inplace=False),
+#             nn.Conv2d(inchannel, outchannel, kernel_size=1),
+#             nn.BatchNorm2d(outchannel),
+#             nn.ReLU(inplace=False)
+#         )
+
+#     def forward(self, x):
+#         out = self.dconv(x)
+#         return out
+
+
+# class MDTA(nn.Module):
+#     def __init__(self, in_dim, layers):
+#         super(MDTA, self).__init__()
+#         self.query_conv = DConv(in_dim, in_dim)
+#         self.key_conv = DConv(in_dim, in_dim)
+#         self.value_conv = DConv(in_dim, in_dim)
+#         self.gamma = nn.Parameter(torch.zeros(1))
+#         self.layers = layers
+#         # self.ln = nn.LayerNorm()
+
+#     def forward(self, x):
+#         # x = x.to(next(self.parameters()).device)
+#         # x = nn.LayerNorm([x.size(1), x.size(2), x.size(3)])(x)
+#         x = F.layer_norm(x, [x.size(1), x.size(2), x.size(3)])
+#         # x = self.ln(x)  # use the input tensor's dimensions to define the LayerNorm normalization shape
+
+#         proj_query = self.query_conv(x).view(x.size(0), -1, x.size(2) * x.size(3)).permute(0, 2, 1)
+#         proj_key = self.key_conv(x).view(x.size(0), -1, x.size(2) * x.size(3))
+#         if self.layers < 2:
+#             energy = torch.bmm(proj_key, proj_query)
+#             proj_value = self.value_conv(x).view(x.size(0), -1, x.size(2) * x.size(3)).permute(0, 2, 1)
+
+#         else:
+#             energy = torch.bmm(proj_query, proj_key)
+#             # print("layer index", self.layers)
+#             # print("energy shape", energy.shape)
+#             proj_value = self.value_conv(x).view(x.size(0), -1, x.size(2) * x.size(3))
+#             # print("value shape",proj_value.shape)
+#         attention = torch.softmax(energy, dim=-1)
+#         out = torch.bmm(proj_value, attention.permute(0, 2, 1))
+#         out = out.view(x.size(0), -1, x.size(2), x.size(3))
+#         out = self.gamma * out + x
+#         return out
+
+# class BaseConvBlock(nn.Module):
+#     def     __init__(self,dim):
+#         super(BaseConvBlock,self).__init__()
+#         self.conv1 = nn.Conv2d(dim,dim,kernel_size=3,padding = 1)
+#         self.act = nn.ReLU(inplace = True)
+#         self.conv2 = nn.Conv2d(dim,dim,kernel_size = 3,padding = 1)
+#     def forward(self,x):
+#         out = self.conv1(x)
+#         out = self.act(out)
+#         out = self.conv2(out)
+#         return out
+
+# class GDFN(nn.Module):
+#     def __init__(self, in_dim, ratio):
+#         super(GDFN, self).__init__()
+#         self.upconv1 = nn.Conv2d(in_dim, ratio * in_dim, kernel_size=1)
+#         self.lowconv1 = nn.Conv2d(in_dim, ratio * in_dim, kernel_size=1)
+
+#         self.uppath = DConv(ratio * in_dim, ratio * in_dim)
+#         self.lowpath = DConv(ratio * in_dim, ratio * in_dim)
+#         self.relu = nn.SiLU(inplace=False)
+#         self.finconv = nn.Conv2d(ratio * in_dim, in_dim, kernel_size=1)
+
+#     def forward(self, x):
+#         temp = x
+
+#         # x = nn.LayerNorm(x.size()[1:])(x)  # use the input tensor's dimensions to define the LayerNorm normalization shape
+#         x = F.layer_norm(x, [x.size(1), x.size(2), x.size(3)])
+#         # x = nn.LayerNorm([x.size(1), x.size(2), x.size(3)])(x)
+#         # upper branch
+#         up = self.upconv1(x)
+#         up = self.uppath(up)
+#         # lower branch
+#         low = self.lowconv1(x)
+#         low = self.lowpath(low)
+#         low = self.relu(low)
+#         out = low * up
+#         out = self.finconv(out)
+#         out = temp + out
+#         return out
+
+
+# class Transformerblock(nn.Module):
+#     def __init__(self, in_dim, layers):
+#         super(Transformerblock, self).__init__()
+#         # self.first = MDTA(in_dim, layers)
+#         self.first = BaseConvBlock(in_dim)
+#         print("useing BaseConv")
+#         self.second = GDFN(in_dim, ratio=2)
+
+#     def forward(self, x):
+#         x = self.first(x)
+#         x = self.second(x)
+#         return x
+
+
+# class Down(nn.Module):
+#     """Downscaling with maxpool then double depthwise separable conv"""
+
+#     def __init__(self, in_channels, out_channels, nums, layers):
+#         super().__init__()
+#         self.blocks = nn.Sequential(*[Transformerblock(in_channels, layers) for _ in range(nums)])
+#         self.maxpool_conv = nn.MaxPool2d(2)
+#         self.conv = DConv(in_channels, out_channels)
+
+#     def forward(self, x):
+#         x = self.maxpool_conv(x)
+#         x = self.blocks(x)
+#         x = self.conv(x)
+#         return x
+
+
+# class Up(nn.Module):
+#     """Upscaling then double depthwise separable conv"""
+
+#     def __init__(self, in_channels, out_channels, nums, layers, bilinear=True):
+#         super().__init__()
+#         self.layers = layers
+#         # if bilinear, use the normal convolutions to reduce the number of channels
+#         if bilinear:
+#             self.blocks = nn.Sequential(*[Transformerblock(in_channels, self.layers) for _ in range(nums)])
+#             self.up = nn.Upsample(scale_factor=2, mode='bilinear', align_corners=True)
+#             self.conv = DConv(in_channels, out_channels)
+#         else:
+#             self.up = nn.ConvTranspose2d(in_channels, in_channels // 2, kernel_size=2, stride=2)
+#             self.blocks = nn.Sequential(*[Transformerblock(in_channels, self.layers) for _ in range(nums)])
+#             self.conv = DConv(in_channels, out_channels)
+
+#     def forward(self, x1, x2):
+#         x1 = self.blocks(x1)
+#         x1 = self.up(x1)
+#         x1 = self.conv(x1)
+#         # print("upsampled bottom size", x1.shape)
+#         # input is CHW
+#         diffY = x2.size()[2] - x1.size()[2]
+#         diffX = x2.size()[3] - x1.size()[3]
+#         x1 = F.pad(x1, [diffX // 2, diffX - diffX // 2,
+#                         diffY // 2, diffY - diffY // 2])
+#         x = torch.cat([x2, x1], dim=1)
+#         # print("merged size", x.shape)
+
+#         return self.conv(x)
+
+
+# class OutConv(nn.Module):
+#     def __init__(self, in_channels, out_channels):
+#         super(OutConv, self).__init__()
+#         self.conv = nn.Sequential(
+#             nn.Conv2d(in_channels, in_channels, kernel_size=3, padding=1, groups=in_channels),
+#             nn.BatchNorm2d(in_channels),
+#             nn.ReLU(inplace=False),
+#             nn.Conv2d(in_channels, out_channels, kernel_size=1),
+#             nn.BatchNorm2d(out_channels),
+#             nn.ReLU(inplace=False)
+#         )
+
+#     def forward(self, x):
+#         return self.conv(x)
+
+
+# class Encoder(nn.Module):
+#     def __init__(self, Downnumblocks, n_channels=3, n_classes=64, bilinear=True):
+#         super(Encoder, self).__init__()
+#         self.n_channels = n_channels
+#         self.n_classes = n_classes
+#         self.bilinear = bilinear
+#         self.inc = DConv(n_channels, 64)
+#         self.down1 = Down(64, 128, Downnumblocks[0], 0)
+#         self.down2 = Down(128, 256, Downnumblocks[1], 1)
+#         self.down3 = Down(256, 512, Downnumblocks[2], 2)
+#         factor = 2 if bilinear else 1
+#         self.down4 = Down(512, 1024, Downnumblocks[3], 3)
+
+#     def forward(self, x):
+#         x1 = self.inc(x)
+#         x2 = self.down1(x1)
+#         x3 = self.down2(x2)
+#         x4 = self.down3(x3)
+#         x5 = self.down4(x4)
+#         return x5, x4, x3, x2, x1
+
+
+# class WeightedFeatureAggregation(nn.Module):
+#     def __init__(self, num_features=4, initial_weights=[0.5, 0.3, 0.15, 0.05]):
+#         super(WeightedFeatureAggregation, self).__init__()
+#         self.num_features = num_features
+#         # define weights as learnable parameters
+#         self.weights = nn.Parameter(torch.tensor(initial_weights), requires_grad=True)
+
+#     def forward(self, feature_maps):
+#         # apply weights to each feature map
+#         weighted_feature_maps = [feature_maps[i] * self.weights[i] for i in range(self.num_features)]
+#         # sum the weighted feature maps
+#         fused_feature_map = torch.stack(weighted_feature_maps, dim=0).sum(dim=0)
+#         return fused_feature_map
+
+
+# class Decoder(nn.Module):
+#     def __init__(self, downblocks, Upblocks, n_classes=64, bilinear=True):
+#         super(Decoder, self).__init__()
+#         self.downblocks = downblocks
+#         self.Upblocks = Upblocks
+#         self.branch1 = Encoder(Downnumblocks=self.downblocks)
+#         self.up1 = Up(1024, 512, self.Upblocks[0], 3, bilinear)
+#         self.up2 = Up(512, 256, self.Upblocks[1], 2, bilinear)
+#         self.up3 = Up(256, 128, self.Upblocks[2], 1, bilinear)
+#         self.up4 = Up(128, 64, self.Upblocks[3], 0, bilinear)
+#         self.upconv1 = OutConv(512, n_classes)
+#         self.upconv2 = OutConv(256, n_classes)
+#         self.upconv3 = OutConv(128, n_classes)
+
+#         self.upsample = nn.Sequential(
+#             nn.Conv2d(64, 64 * 4, kernel_size=3, stride=1, padding=1),
+#             nn.LeakyReLU(),
+#             nn.PixelShuffle(upscale_factor=2))
+#         self.weight = WeightedFeatureAggregation()
+#         self.outc = OutConv(64, n_classes)
+
+#     def forward(self, x):
+#         x, x4, x3, x2, x1 = self.branch1(x)
+#         up1 = self.up1(x, x4)
+#         up2 = self.up2(up1, x3)
+#         up3 = self.up3(up2, x2)
+#         up4 = self.up4(up3, x1)
+#         # up1p = self.upconv1(up1)
+#         # up1p = self.upsample(up1p)
+#         # up1p = self.upsample(up1p)
+#         # up1pp = self.upsample(up1p)
+#         # up2p = self.upconv2(up2)
+#         # up2p = self.upsample(up2p)
+#         # up2pp = self.upsample(up2p)
+#         # up3p = self.upconv3(up3)
+#         # up3pp = self.upsample(up3p)
+#         # feature_maps = [up1pp, up2pp, up3pp, up4]
+#         # out = self.weight(feature_maps)
+#         # logits = self.outc(out)
+#         logits = self.outc(up4)
+#         return logits
+
+# class Classifier(nn.Module):
+
+#     def __init__(self, num_classes,  upblocks=[1, 1, 1, 1], downblocks=[0, 0, 0, 0]):
+#         super(Classifier, self).__init__()
+#         self.mod_pad_h = 0
+#         self.mod_pad_w = 0
+#         self.decoder = Decoder(downblocks=downblocks, Upblocks=upblocks, n_classes=64)
+#         self.global_avg_pool = nn.AdaptiveAvgPool2d(1)
+#         self.fc2 = nn.Linear(64,num_classes)
+#         self.fc1 = nn.Linear(64, 64)
+#         self.relu = nn.ReLU()
+#         # Dropout layer
+#         self.dropout = nn.Dropout(p=0.5)  # dropout_prob defines the probability of dropping out neurons
+
+
+#     def forward(self, x):
+#         x = self.decoder(x)
+#         x = self.global_avg_pool(x)
+#         x = torch.flatten(x, 1)  # flatten feature map to vector
+#         x = self.relu(self.fc1(x))
+#         x = self.dropout(x)
+#         x = self.fc2(x)
+#         return x
+
+# batch_size = 1
+# num_channels = 3
+# image_height = 224
+# image_width = 224
+# num_classes = 1  # assume 10 classes
+
+# # create a random input image (for demonstration only)
+# dummy_images = torch.randn(batch_size, num_channels, image_height, image_width)
+
+# # initialize the classification network
+# classification_model = Classifier(num_classes)
+
+# # forward pass
+# output_logits = classification_model(dummy_images)
+
+# # print classification result
+# print(output_logits.shape)  # should be (batch_size, num_classes)
+
+# flops,params = profile(classification_model,inputs = (dummy_images,))
+# print(f"==========================")
+# print(f"FLops:{flops/1e9:.2f}G")
+# print(f"Params:{params/1e6:.2f}M")
+
+
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+from thop import profile
+
+# ==========================================
+# 1. Basic modules (DConv, GDFN, etc.) - unchanged
+# ==========================================
+class DConv(nn.Module):
+    def __init__(self, inchannel, outchannel):
+        super(DConv, self).__init__()
+        self.dconv = nn.Sequential(
+            nn.Conv2d(inchannel, inchannel, kernel_size=3, padding=1, groups=inchannel),
+            nn.BatchNorm2d(inchannel),
+            nn.ReLU(inplace=False),
+            nn.Conv2d(inchannel, outchannel, kernel_size=1),
+            nn.BatchNorm2d(outchannel),
+            nn.ReLU(inplace=False)
+        )
+    def forward(self, x):
+        return self.dconv(x)
+
+class MDTA(nn.Module):
+    def __init__(self, in_dim, layers):
+        super(MDTA, self).__init__()
+        self.query_conv = DConv(in_dim, in_dim)
+        self.key_conv = DConv(in_dim, in_dim)
+        self.value_conv = DConv(in_dim, in_dim)
+        self.gamma = nn.Parameter(torch.zeros(1))
+        self.layers = layers
+
+    def forward(self, x):
+        x_norm = F.layer_norm(x, [x.size(1), x.size(2), x.size(3)])
+        proj_query = self.query_conv(x_norm).view(x.size(0), -1, x.size(2) * x.size(3)).permute(0, 2, 1)
+        proj_key = self.key_conv(x_norm).view(x.size(0), -1, x.size(2) * x.size(3))
+        
+        if self.layers < 2:
+            energy = torch.bmm(proj_key, proj_query)
+            proj_value = self.value_conv(x_norm).view(x.size(0), -1, x.size(2) * x.size(3)).permute(0, 2, 1)
+        else:
+            energy = torch.bmm(proj_query, proj_key)
+            proj_value = self.value_conv(x_norm).view(x.size(0), -1, x.size(2) * x.size(3))
+            
+        attention = torch.softmax(energy, dim=-1)
+        out = torch.bmm(proj_value, attention.permute(0, 2, 1))
+        out = out.view(x.size(0), -1, x.size(2), x.size(3))
+        out = self.gamma * out + x
+        return out
+
+class BaseConvBlock(nn.Module):
+    def __init__(self, dim):
+        super(BaseConvBlock, self).__init__()
+        self.conv1 = nn.Conv2d(dim, dim, kernel_size=3, padding=1)
+        self.act = nn.ReLU(inplace=True)
+        self.conv2 = nn.Conv2d(dim, dim, kernel_size=3, padding=1)
+    def forward(self, x):
+        out = self.conv1(x)
+        out = self.act(out)
+        out = self.conv2(out)
+        return out
+
+class GDFN(nn.Module):
+    def __init__(self, in_dim, ratio):
+        super(GDFN, self).__init__()
+        self.upconv1 = nn.Conv2d(in_dim, ratio * in_dim, kernel_size=1)
+        self.lowconv1 = nn.Conv2d(in_dim, ratio * in_dim, kernel_size=1)
+        self.uppath = DConv(ratio * in_dim, ratio * in_dim)
+        self.lowpath = DConv(ratio * in_dim, ratio * in_dim)
+        self.relu = nn.SiLU(inplace=False)
+        self.finconv = nn.Conv2d(ratio * in_dim, in_dim, kernel_size=1)
+
+    def forward(self, x):
+        temp = x
+        x = F.layer_norm(x, [x.size(1), x.size(2), x.size(3)])
+        up = self.upconv1(x)
+        up = self.uppath(up)
+        low = self.lowconv1(x)
+        low = self.lowpath(low)
+        low = self.relu(low)
+        out = low * up
+        out = self.finconv(out)
+        out = temp + out
+        return out
+
+class Transformerblock(nn.Module):
+    def __init__(self, in_dim, layers):
+        super(Transformerblock, self).__init__()
+        # based on the current code, classification temporarily uses BaseConvBlock
+        #self.first = BaseConvBlock(in_dim)
+        # to use LSA, uncomment the line below and comment out the line above
+        self.first = MDTA(in_dim, layers)
+        self.second = GDFN(in_dim, ratio=2)
+
+    def forward(self, x):
+        x = self.first(x)
+        x = self.second(x)
+        return x
+
+class Down(nn.Module):
+    def __init__(self, in_channels, out_channels, nums, layers):
+        super().__init__()
+        self.blocks = nn.Sequential(*[Transformerblock(in_channels, layers) for _ in range(nums)])
+        self.maxpool_conv = nn.MaxPool2d(2)
+        self.conv = DConv(in_channels, out_channels)
+
+    def forward(self, x):
+        x = self.maxpool_conv(x)
+        x = self.blocks(x)
+        x = self.conv(x)
+        return x
+
+# ==========================================
+# 2. Encoder (downsampling only)
+# ==========================================
+class Encoder(nn.Module):
+    def __init__(self, Downnumblocks, n_channels=3):
+        super(Encoder, self).__init__()
+        self.inc = DConv(n_channels, 64)
+        self.down1 = Down(64, 128, Downnumblocks[0], 0)
+        self.down2 = Down(128, 256, Downnumblocks[1], 1)
+        self.down3 = Down(256, 512, Downnumblocks[2], 2)
+        self.down4 = Down(512, 1024, Downnumblocks[3], 3)
+
+    def forward(self, x):
+        x1 = self.inc(x)       # 64
+        x2 = self.down1(x1)    # 128
+        x3 = self.down2(x2)    # 256
+        x4 = self.down3(x3)    # 512
+        x5 = self.down4(x4)    # 1024
+        # classification only needs the deepest feature x5
+        return x5
+
+# ==========================================
+# 3. Classifier (classification head only)
+# ==========================================
+class Classifier(nn.Module):
+    def __init__(self, num_classes, downblocks=[1, 1, 1, 1]):
+        super(Classifier, self).__init__()
+        
+        # 1. backbone (Encoder Only)
+        self.encoder = Encoder(Downnumblocks=downblocks, n_channels=3)
+
+        # 2. global pooling (1024x7x7 -> 1024x1x1)
+        self.global_avg_pool = nn.AdaptiveAvgPool2d(1)
+
+        # 3. classification head (MLP Head)
+        # input dimension is the channel count of the encoder's last layer (1024)
+        self.fc_block = nn.Sequential(
+            nn.Linear(1024, 256),  # dimensionality reduction
+            nn.ReLU(),
+            nn.Dropout(p=0.5),
+            nn.Linear(256, num_classes)  # output class logits
+        )
+
+    def forward(self, x):
+        # extract features
+        x = self.encoder(x) # [B, 1024, H/16, W/16]
+
+        # pooling
+        x = self.global_avg_pool(x) # [B, 1024, 1, 1]
+        x = torch.flatten(x, 1)     # [B, 1024]
+
+        # classify
+        x = self.fc_block(x) # [B, num_classes]
+        return x
+
+# ==========================================
+# 4. Test and compute FLOPs
+# ==========================================
+if __name__ == '__main__':
+    batch_size = 1
+    num_channels = 3
+    image_height = 224
+    image_width = 224
+    num_classes = 10  # assume 10 classes
+
+    dummy_images = torch.randn(batch_size, num_channels, image_height, image_width)
+
+    # downblocks controls how many Transformer Blocks are stacked at each level.
+    # [0,0,0,0] may be too shallow; consider [1,1,1,1] or [2,2,2,2] for more depth.
+    model = Classifier(num_classes, downblocks=[1, 1, 1, 1])
+
+    output = model(dummy_images)
+    print("Output shape:", output.shape)
+
+    print("Computing FLOPs and Params...")
+    flops, params = profile(model, inputs=(dummy_images, ))
+    
+    print(f"==========================")
+    print(f"Model: Encoder-Only Classifier")
+    print(f"FLOPs: {flops / 1e9:.2f} G")
+    print(f"Params: {params / 1e6:.2f} M")
+    print(f"==========================")

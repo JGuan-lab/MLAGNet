@@ -1,0 +1,10 @@
+DATASET:
+  root_dataset: "'/home/yons/data/Weiyubing/Ad/ADEChallengeData2016"
+  list_train: "/home/yons/data/Weiyubing/Ad/ADEChallengeData2016/training.odgt"
+  list_val: "'/home/yons/data/Weiyubing/Ad/ADEChallengeData2016/validation.odgt"
+  num_class: 150
+  imgSizes: (300, 375, 450, 525, 600)
+  imgMaxSize: 1000
+  padding_constant: 32
+  segm_downsampling_rate: 4
+  random_flip: True
