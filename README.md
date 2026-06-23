@@ -1,7 +1,5 @@
 # MLAGNet
 
-**English** | [中文](#中文)
-
 > A **unified feature-extraction framework for medical imaging** that drives three tasks — **super-resolution, semantic segmentation, and image classification** — with the same set of core building blocks (depthwise separable convolution + local self-attention + gated feed-forward).
 
 This repository is the cleaned-up version of the thesis codebase. The three tasks share the same feature-extraction design (`DConv` + `MDTA/LSA` + `GDFN` + `Transformerblock`) and are built as:
@@ -169,7 +167,6 @@ cat classification.tar.part* > classification.tar && tar -xf classification.tar
 
 This repository was organized from the original thesis project `uureal`: code only (data, weights, logs, output images, and caches removed), reorganized into **super-resolution / segmentation / classification**, with a small number of broken/empty files cleaned up. The full original project (with data and weights) is kept on the lab server, unchanged.
 
----
----
+
 
 
